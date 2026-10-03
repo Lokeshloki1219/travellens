@@ -1,0 +1,23 @@
+# Dependencies - reinstalled from package-lock.json inside the image.
+# This is the single biggest exclusion: 56 MB, and host-built native modules
+# would be wrong for the Alpine base anyway.
+node_modules/
+
+# Local build output - rebuilt in the image
+dist/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Version control and IDE metadata
+.git
+.gitignore
+.idea/
+.vscode/
+
+# Docs and container files themselves
+*.md
+Dockerfile
+.dockerignore

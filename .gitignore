@@ -1,0 +1,23 @@
+# Secrets - never commit
+.env
+.env.local
+.env.*.local
+
+# Build output
+travellens-backend/target/
+travellens-frontend/node_modules/
+travellens-frontend/dist/
+
+# Uploaded media lives in a Docker volume, not in git
+travellens-backend/uploads/
+
+# IDE
+.idea/
+.vscode/
+.settings/
+.classpath
+.project
+*.iml
+
+# Milestone 2 source archive - contains pre-rotation secrets
+travellens-src.tar.gz

@@ -1,0 +1,26 @@
+# Build output - rebuilt inside the image, and the jar alone is 58 MB
+target/
+
+# Uploaded traveler photos (2.3 MB of user data). These belong in a volume,
+# never inside the image, or every deploy would ship stale media.
+uploads/
+
+# Secrets - must never enter the build context
+.env
+.env.*
+!.env.example
+
+# Version control and IDE metadata
+.git
+.gitignore
+.idea/
+.settings/
+.classpath
+.project
+*.iml
+.vscode/
+
+# Docs and container files themselves
+*.md
+Dockerfile
+.dockerignore
