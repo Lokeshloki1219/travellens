@@ -7,18 +7,13 @@ import com.travellens.backend.model.User;
 import com.travellens.backend.repository.DestinationRepository;
 import com.travellens.backend.repository.PostRepository;
 import com.travellens.backend.repository.UserRepository;
-import org.springframework.beans.factory.annotation.Value;
+import com.travellens.backend.storage.StorageService;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.util.List;
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/posts")
@@ -27,15 +22,16 @@ public class PostController {
     private final PostRepository postRepository;
     private final DestinationRepository destinationRepository;
     private final UserRepository userRepository;
+    private final StorageService storageService;
 
-    @Value("${app.upload.dir}")
-    private String uploadDir;
-
-    public PostController(PostRepository postRepository, DestinationRepository destinationRepository,
-                           UserRepository userRepository) {
+    public PostController(PostRepository postRepository,
+                          DestinationRepository destinationRepository,
+                          UserRepository userRepository,
+                          StorageService storageService) {
         this.postRepository = postRepository;
         this.destinationRepository = destinationRepository;
         this.userRepository = userRepository;
+        this.storageService = storageService;
     }
 
     @GetMapping
@@ -48,12 +44,12 @@ public class PostController {
 
     @PostMapping(consumes = "multipart/form-data")
     public Post createPost(@RequestParam Long destinationId,
-                            @RequestParam(required = false) String caption,
-                            @RequestParam(required = false) String tip,
-                            @RequestParam(required = false) Double approximateExpense,
-                            @RequestParam(required = false) Integer rating,
-                            @RequestParam(required = false) MultipartFile media,
-                            Authentication authentication) throws IOException {
+                           @RequestParam(required = false) String caption,
+                           @RequestParam(required = false) String tip,
+                           @RequestParam(required = false) Double approximateExpense,
+                           @RequestParam(required = false) Integer rating,
+                           @RequestParam(required = false) MultipartFile media,
+                           Authentication authentication) throws IOException {
 
         String email = authentication.getName();
         User user = userRepository.findByEmail(email)
@@ -71,19 +67,13 @@ public class PostController {
         post.setRating(rating);
 
         if (media != null && !media.isEmpty()) {
-            Path uploadPath = Paths.get(uploadDir);
-            if (!Files.exists(uploadPath)) {
-                Files.createDirectories(uploadPath);
-            }
+            // Milestone 4: the bytes go to Cloud Storage rather than to a
+            // directory on the container filesystem. The stored value keeps the
+            // same /uploads/<name> shape, so rows written before and after the
+            // move are read back identically.
+            String objectName = storageService.upload(media);
 
-            String originalName = media.getOriginalFilename() == null ? "file" : media.getOriginalFilename();
-            String extension = originalName.contains(".") ? originalName.substring(originalName.lastIndexOf(".")) : "";
-            String storedName = UUID.randomUUID() + extension;
-
-            Path target = uploadPath.resolve(storedName);
-            Files.copy(media.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
-
-            post.setMediaUrl("/uploads/" + storedName);
+            post.setMediaUrl("/uploads/" + objectName);
             String contentType = media.getContentType() == null ? "" : media.getContentType();
             post.setMediaType(contentType.startsWith("video") ? "VIDEO" : "IMAGE");
         }

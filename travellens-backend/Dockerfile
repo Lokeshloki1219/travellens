@@ -17,21 +17,28 @@ RUN mvn -B clean package -DskipTests
 # JRE only (no compiler, no Maven) on Alpine.
 FROM eclipse-temurin:17-jre-alpine AS runtime
 
+# curl and jq are used by the entrypoint to read secrets from Secret Manager at
+# container start. Together they add roughly 5 MB.
+RUN apk add --no-cache curl jq
+
 # Run as an unprivileged user rather than root.
 RUN addgroup -S app && adduser -S app -G app
 
 WORKDIR /app
 
-# Create the upload directory owned by the app user BEFORE the named volume is
-# attached, so the non-root process can write uploaded photos into it.
-RUN mkdir -p /app/uploads && chown -R app:app /app
-
 COPY --from=build --chown=app:app /build/target/backend.jar /app/backend.jar
+COPY --chown=app:app entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 USER app
 EXPOSE 8080
 
-HEALTHCHECK --interval=10s --timeout=5s --start-period=45s --retries=12 \
-  CMD wget -q --spider http://localhost:8080/api/destinations || exit 1
+# Milestone 4: no uploads directory and no volume. Traveler media goes straight
+# to Cloud Storage, so the container filesystem holds nothing but the jar.
 
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=70", "-jar", "/app/backend.jar"]
+HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=15 \
+  CMD wget -q --spider http://127.0.0.1:8080/api/destinations || exit 1
+
+# The entrypoint fetches secrets, exports them, then exec's the JVM so Java
+# remains PID 1 and receives signals directly.
+ENTRYPOINT ["/app/entrypoint.sh"]

@@ -21,7 +21,22 @@
     <properties>
         <java.version>17</java.version>
         <jjwt.version>0.12.6</jjwt.version>
+        <google-cloud-libraries.version>26.50.0</google-cloud-libraries.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Keeps every Google Cloud client library on a mutually
+                 compatible set of versions (gRPC, Guava, auth, etc.). -->
+            <dependency>
+                <groupId>com.google.cloud</groupId>
+                <artifactId>libraries-bom</artifactId>
+                <version>${google-cloud-libraries.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>
@@ -48,6 +63,31 @@
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
+        </dependency>
+
+        <!-- Milestone 4: schema is created by versioned migrations instead of
+             Hibernate ddl-auto. flyway-database-postgresql is required
+             separately from Flyway 10 onwards. -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-flyway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+
+        <!-- Milestone 4: traveler post media moves off the container
+             filesystem and into a Cloud Storage bucket. Authentication is
+             Application Default Credentials via the VM's attached service
+             account, so no key file is ever needed. -->
+        <dependency>
+            <groupId>com.google.cloud</groupId>
+            <artifactId>google-cloud-storage</artifactId>
         </dependency>
 
         <!-- JWT support -->
@@ -95,13 +135,12 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
-            
+
             <plugin>
-			    <groupId>org.apache.maven.plugins</groupId>
-			    <artifactId>maven-jar-plugin</artifactId>
-			    <version>3.4.2</version>
-			</plugin>
-			
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+            </plugin>
         </plugins>
     </build>
 
