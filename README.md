@@ -21,33 +21,28 @@ only from inside the travellens network.
 Two named volumes hold all state: pgdata for the database and uploads for
 traveler photos. The images themselves are stateless.
 
-## Running locally
+## Architecture (Milestone 4)
 
-Requires Docker Desktop. Copy .env.example to .env, then set a database
-password and a JWT signing key. The key must be at least 32 characters -
-HMAC-SHA256 rejects anything shorter.
+No application state lives on the compute layer.
 
-Then run: docker compose up --build
+- **Database** - Cloud SQL PostgreSQL 16, private IP only, reached over VPC peering
+- **Uploads** - Cloud Storage bucket with public access prevention, written and
+  read using the VM's service account via Application Default Credentials
+- **Secrets** - Secret Manager, read by the container entrypoint at startup
+- **Schema** - created by `db/migration/V1__initial_schema.sql` (Flyway);
+  Hibernate runs with `ddl-auto=validate` and verifies rather than alters
 
-Open http://localhost once all three containers report healthy.
+## Running
 
-## Running from published images
+Requires a GCE VM with a service account holding secretmanager.secretAccessor
+and storage.objectAdmin, plus a reachable Cloud SQL instance.
 
-docker-compose.prod.yml pulls the tagged images from Artifact Registry
-instead of building them:
+    docker compose -f docker-compose.prod.yml up -d
 
-docker compose -f docker-compose.prod.yml up -d
+There is no .env file. The entrypoint reads the database password and JWT
+signing key from Secret Manager using the instance metadata server, so no
+credential is stored on disk, in the image, or in this repository.
 
-## Configuration
-
-No credentials are stored in this repository. Every environment-specific value
-is read from the environment at run time, and the two secrets have no default
-so the application fails to start rather than falling back to a known value.
-
-POSTGRES_PASSWORD      - database password
-APP_JWT_SECRET         - JWT signing key, 32+ characters
-SPRING_DATASOURCE_URL  - JDBC URL
-APP_UPLOAD_DIR         - absolute path for media uploads
-
-.env is gitignored and excluded from both Docker build contexts, so these
-values never enter an image.
+Note: on Spring Boot 4, `flyway-core` alone is not enough - the
+`spring-boot-flyway` auto-configuration module must also be present, or
+migrations silently never run.
