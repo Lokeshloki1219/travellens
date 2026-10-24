@@ -1,0 +1,179 @@
+# ---------------------------------------------------------------------------
+# TravelLens backend - Spring Boot on GKE
+#
+# Milestone 3 ran one backend container, started by hand with docker compose.
+# If it died, it stayed dead until someone noticed. This Deployment replaces
+# that: two replicas, and a controller whose only job is to keep the observed
+# number of healthy pods equal to the desired number.
+#
+# Nothing in here holds state. The database is Cloud SQL on a private IP,
+# uploads go to Cloud Storage, and the two secrets are read from Secret
+# Manager at startup. That is what makes replicas possible at all - two copies
+# of a container that each owned a local disk would disagree with each other
+# within minutes.
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: default
+  labels:
+    app: backend
+spec:
+  # The HorizontalPodAutoscaler owns this number once it is applied; two is the
+  # floor it starts from and will not go below.
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: backend
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Never take a replica away during a rollout: add the new pod first, wait
+      # for it to pass its readiness probe, then remove the old one. With two
+      # replicas this guarantees at least two Ready pods throughout a deploy.
+      maxUnavailable: 0
+      maxSurge: 1
+
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      # Binds the pod to the Google service account via Workload Identity.
+      # Without this line the entrypoint cannot read its secrets and the
+      # container exits on startup.
+      serviceAccountName: travellens-sa
+
+      # Keep the two replicas on different nodes where possible. This is the
+      # other half of the PodDisruptionBudget story: a budget cannot protect
+      # you if both replicas sit on the same node and that node is drained.
+      # ScheduleAnyway rather than DoNotSchedule, so a scale-up that does not
+      # fit still schedules instead of sitting Pending.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: backend
+
+      # Long enough for the preStop sleep plus an orderly JVM shutdown.
+      terminationGracePeriodSeconds: 40
+
+      containers:
+        - name: backend
+          image: us-central1-docker.pkg.dev/travellens-ccp/travellens/backend:v3
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8080
+
+          # Non-sensitive configuration only. The database password and the JWT
+          # signing key are NOT here - the entrypoint reads them from Secret
+          # Manager using the identity above. The two *_SECRET variables are
+          # secret names, not values, which is why this file is safe to commit.
+          env:
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:postgresql://10.7.0.3:5432/springboot
+            - name: SPRING_DATASOURCE_USERNAME
+              value: travellens
+            - name: APP_STORAGE_BUCKET
+              value: travellens-uploads-travellens-ccp
+            - name: DB_PASSWORD_SECRET
+              value: travellens-db-password
+            - name: JWT_SECRET_NAME
+              value: travellens-jwt-secret
+
+          # Requests are what the scheduler and the HPA use. The HPA targets
+          # 50% of 200m, so a replica is considered loaded at 100m of actual
+          # CPU - low enough that real traffic moves the number.
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              # No CPU limit on purpose: a CPU limit throttles the JVM during
+              # startup and makes the startup probe window much harder to size.
+              memory: 1Gi
+
+          # ---------------- Health probes ----------------
+          #
+          # Three probes, three different questions.
+          #
+          # startupProbe  - "has the JVM finished booting yet?" Spring Boot plus
+          #                 Flyway plus the HikariCP pool takes 40-70 seconds.
+          #                 While this probe is running the liveness probe is
+          #                 suspended, so a slow start cannot be mistaken for a
+          #                 hung process. 5s x 36 = three minutes of grace.
+          #
+          # livenessProbe - "is this process still able to serve HTTP?" It hits
+          #                 /healthz/live, which returns 200 without touching
+          #                 the database or any other dependency. Failing it
+          #                 kills the container, so it must only fail for
+          #                 reasons that a restart actually fixes - a deadlock,
+          #                 an OOM-wedged heap, a thread pool that has stopped
+          #                 accepting work.
+          #
+          # readinessProbe- "should this pod receive traffic right now?" It hits
+          #                 /healthz/ready, which takes a connection from the
+          #                 pool and runs SELECT 1. Failing it removes the pod
+          #                 from the Service endpoints but leaves it running, so
+          #                 a database blip stops traffic without restarting
+          #                 anything.
+          #
+          # The distinction matters. If the liveness probe also checked the
+          # database, a thirty-second Cloud SQL maintenance event would restart
+          # every replica simultaneously, and the restarts would stampede the
+          # database just as it came back.
+          startupProbe:
+            httpGet:
+              path: /healthz/live
+              port: 8080
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 36
+
+          livenessProbe:
+            httpGet:
+              path: /healthz/live
+              port: 8080
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /healthz/ready
+              port: 8080
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # When a pod is deleted, Kubernetes removes it from the Service
+          # endpoints and sends SIGTERM at the same moment. Those two things
+          # race: the endpoint removal has to propagate to kube-proxy on every
+          # node before traffic stops arriving. Sleeping here keeps the old pod
+          # answering for ten more seconds, which is what turns a rolling
+          # restart from "a few 502s" into "no 502s".
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+
+          # The image already sets USER app, so this process is not root. Java
+          # needs no Linux capabilities and binds a port above 1024, so all of
+          # them are dropped.
+          #
+          # runAsNonRoot: true is deliberately NOT set here. It makes kubelet
+          # verify the effective UID before starting the container, and it can
+          # only do that when the image declares a numeric user. Our Dockerfile
+          # says "USER app", a name, so the pod would be rejected with
+          # "image has non-numeric user (app), cannot verify user is non-root".
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

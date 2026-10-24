@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------------------
+# The Service the Ingress points at.
+#
+# Two annotations are doing the interesting work.
+#
+# cloud.google.com/neg
+#   Turns on container-native load balancing. Without it, the Google load
+#   balancer sends traffic to a node port and the node's kube-proxy forwards it
+#   on to a pod - possibly a pod on a different node, which costs an extra hop
+#   and loses the client IP. With it, the load balancer is given a network
+#   endpoint group containing the pod IPs themselves and talks to pods
+#   directly. It also means the load balancer's own health checks hit each pod
+#   individually, so an unhealthy pod is taken out of rotation at the edge
+#   rather than only inside the cluster.
+#
+# cloud.google.com/backend-config
+#   Attaches the health check definition in 05-backendconfig.yaml. The Google
+#   load balancer runs health checks of its own, entirely separate from the
+#   kubelet probes in the Deployment, and by default it probes "/" - which for
+#   a React single-page app returns index.html and therefore always looks
+#   healthy. Pointing it at /healthz instead makes it a real check.
+#
+# This stays a ClusterIP. With container-native load balancing the Ingress does
+# not need a NodePort, so no port on any node is exposed to the internet.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: default
+  labels:
+    app: frontend
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+    cloud.google.com/backend-config: '{"default": "frontend-backendconfig"}'
+spec:
+  type: ClusterIP
+  selector:
+    app: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP

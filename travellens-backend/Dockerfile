@@ -33,12 +33,21 @@ RUN chmod +x /app/entrypoint.sh
 USER app
 EXPOSE 8080
 
-# Milestone 4: no uploads directory and no volume. Traveler media goes straight
-# to Cloud Storage, so the container filesystem holds nothing but the jar.
+# No uploads directory and no volume. Traveler media goes straight to Cloud
+# Storage, so the container filesystem holds nothing but the jar.
 
+# Milestone 5: this now points at the liveness endpoint rather than a business
+# route, so a local "docker run" asks the same question Kubernetes will.
+#
+# Kubernetes ignores Dockerfile HEALTHCHECK entirely - the kubelet runs the
+# probes declared in 01-backend-deployment.yaml instead. It is kept because it
+# makes the image behave sensibly under plain Docker and Compose, which is
+# still how it gets smoke-tested before being pushed.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=15 \
-  CMD wget -q --spider http://127.0.0.1:8080/api/destinations || exit 1
+  CMD wget -q --spider http://127.0.0.1:8080/healthz/live || exit 1
 
 # The entrypoint fetches secrets, exports them, then exec's the JVM so Java
-# remains PID 1 and receives signals directly.
+# remains PID 1 and receives signals directly. PID 1 matters here: it is what
+# lets Kubernetes deliver SIGTERM straight to the JVM at the end of the preStop
+# sleep and get an orderly shutdown instead of a 40-second wait and a SIGKILL.
 ENTRYPOINT ["/app/entrypoint.sh"]

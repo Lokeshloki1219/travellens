@@ -1,0 +1,30 @@
+# ---------------------------------------------------------------------------
+# HTTP to HTTPS redirect.
+#
+# This is what satisfies "http:// redirects to https://". It is enforced by the
+# Google load balancer itself, before any request reaches the cluster: a plain
+# HTTP request to port 80 is answered with a 301 pointing at the https:// URL
+# and nothing is proxied.
+#
+# Doing it here rather than in nginx matters. If nginx did the redirect, the
+# load balancer would have to accept the connection, open a connection to a
+# pod, and carry the plaintext request across the VPC before anything decided
+# to reject it. Here the redirect happens at the edge and the plaintext request
+# never enters the cluster at all.
+#
+# The alternative GKE offers is the annotation
+# kubernetes.io/ingress.allow-http: "false", which refuses HTTP outright. That
+# is stricter but worse behaviour: a user who types the bare hostname gets a
+# connection error instead of being moved to the secure site.
+# ---------------------------------------------------------------------------
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata:
+  name: travellens-frontendconfig
+  namespace: default
+spec:
+  redirectToHttps:
+    enabled: true
+    # 301 Moved Permanently. Browsers cache it, so a returning visitor goes
+    # straight to HTTPS without the extra round trip.
+    responseCodeName: MOVED_PERMANENTLY_DEFAULT

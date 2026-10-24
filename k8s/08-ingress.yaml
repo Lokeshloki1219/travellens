@@ -1,0 +1,63 @@
+# ---------------------------------------------------------------------------
+# The front door.
+#
+# Applying this object makes GKE build a global external Application Load
+# Balancer: a static anycast IP, a forwarding rule on 443 and another on 80, an
+# SSL certificate, a URL map, and a backend service pointing at the network
+# endpoint group of frontend pods. All of that from one manifest, and all of it
+# reconciled - delete a pod and the NEG is updated without anyone touching the
+# load balancer.
+#
+# Annotations, in order:
+#
+#   ingress.class: "gce"
+#       Selects the Google Cloud Load Balancer controller. Note this is the
+#       old-style annotation rather than spec.ingressClassName, which is
+#       required: ManagedCertificate does not support ingressClassName.
+#
+#   global-static-ip-name
+#       Binds the load balancer to the reserved address travellens-ip. Without
+#       it the IP is ephemeral and would change if the Ingress were ever
+#       recreated, which would break DNS and invalidate the certificate.
+#
+#   managed-certificates
+#       Attaches 07-managedcertificate.yaml, which serves HTTPS on 443.
+#
+#   v1beta1.FrontendConfig
+#       Attaches 06-frontendconfig.yaml, which turns port 80 into a 301.
+#
+# There is both a host rule and a default backend below. The host rule is the
+# real route and documents the hostname the certificate covers; the default
+# backend is a safety net so that a request arriving with an unexpected Host
+# header - most usefully, a request straight to the IP while debugging - still
+# reaches the application instead of returning the load balancer's own 404.
+#
+# IMPORTANT: the host below must match 07-managedcertificate.yaml exactly.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: travellens-ingress
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "travellens-ip"
+    networking.gke.io/managed-certificates: "travellens-cert"
+    networking.gke.io/v1beta1.FrontendConfig: "travellens-frontendconfig"
+spec:
+  defaultBackend:
+    service:
+      name: frontend
+      port:
+        number: 80
+  rules:
+    - host: travellens-uh.duckdns.org
+      http:
+        paths:
+          - path: /*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80

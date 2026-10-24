@@ -1,0 +1,34 @@
+# ---------------------------------------------------------------------------
+# Health check used by the Google Cloud load balancer.
+#
+# This is the third layer of health checking in the stack and it is worth being
+# clear about why there are three, because they answer to different owners:
+#
+#   kubelet livenessProbe   - decides whether to RESTART a container
+#   kubelet readinessProbe  - decides whether the Service sends it traffic
+#   this BackendConfig      - decides whether the LOAD BALANCER sends it traffic
+#
+# The load balancer's check is the one that keeps a 502 from reaching a user.
+# Even if Kubernetes still believes a pod is fine, the load balancer will stop
+# using an endpoint that fails this check twice in a row.
+#
+# requestPath is /healthz rather than / because / serves index.html for any
+# path in a single-page app and so can never fail - a health check that cannot
+# fail is not a health check.
+# ---------------------------------------------------------------------------
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: frontend-backendconfig
+  namespace: default
+spec:
+  healthCheck:
+    type: HTTP
+    requestPath: /healthz
+    # With container-native load balancing this is the containerPort on the
+    # pod, not a node port.
+    port: 80
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 1
+    unhealthyThreshold: 2

@@ -57,6 +57,20 @@ public class SecurityConfig {
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // Milestone 5: the kubelet probes the pod directly on
+                        // 8080 and has no JWT to present, so these two paths
+                        // must be reachable without authentication. If they are
+                        // not, every probe gets a 401, the readiness probe never
+                        // passes, no pod ever becomes Ready, and the Deployment
+                        // sits at 0/2 while looking otherwise healthy.
+                        //
+                        // Leaving them open is safe because of what they return:
+                        // /healthz/live returns a fixed string, and
+                        // /healthz/ready returns only whether SELECT 1 worked
+                        // and how long it took. Neither exposes a schema, a row,
+                        // a connection string or a version number.
+                        .requestMatchers("/healthz/**").permitAll()
+
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/uploads/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/destinations/**").permitAll()
@@ -73,6 +87,11 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
+        // Only needed for local development against the Vite dev server. In the
+        // deployed stack the browser talks to nginx and nginx proxies /api on
+        // the same origin, so no cross-origin request is ever made and these
+        // rules are never consulted. That is also why moving to an https://
+        // hostname required no change here.
         configuration.setAllowedOrigins(List.of("http://localhost:5173", "http://localhost:3000"));
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));

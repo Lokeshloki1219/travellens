@@ -1,0 +1,34 @@
+# ---------------------------------------------------------------------------
+# Google-managed TLS certificate.
+#
+# Google provisions this certificate, proves control of the domain, installs it
+# on the load balancer and renews it before expiry. There is no private key
+# anywhere in this repository, on any VM, or in any Kubernetes Secret - the key
+# is generated and held by Google Cloud and never leaves it.
+#
+# How validation works, and why the order of operations matters:
+# Google checks that the domain's DNS A record already resolves to the load
+# balancer's IP address. So the sequence has to be
+#
+#     1. reserve the static IP
+#     2. point the DNS A record at it
+#     3. create the Ingress and this certificate
+#
+# Doing it the other way round gives Status: FailedNotVisible, which is the
+# single most common failure with managed certificates and reads like a bug
+# when it is really just an ordering mistake.
+#
+# Provisioning then takes anywhere from about fifteen minutes to an hour. That
+# is why this is created days before the demo, not on the day.
+#
+# IMPORTANT: the domain below must match your DuckDNS hostname exactly, and the
+# same string must appear in 08-ingress.yaml.
+# ---------------------------------------------------------------------------
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: travellens-cert
+  namespace: default
+spec:
+  domains:
+    - travellens-uh.duckdns.org

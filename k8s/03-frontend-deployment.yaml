@@ -1,0 +1,112 @@
+# ---------------------------------------------------------------------------
+# TravelLens frontend - nginx serving the React bundle and proxying the API.
+#
+# Two replicas, same reasoning as the backend. nginx holds no state at all: the
+# bundle is baked into the image, so any replica can answer any request.
+#
+# One ordering detail worth knowing. nginx resolves the hostname in
+# "proxy_pass http://backend:8080" when it loads its config, not per request.
+# If these pods start before the backend Service object exists, nginx exits
+# with "host not found in upstream" and the pod goes into CrashLoopBackOff.
+# That is why the manifests are numbered: 02-backend-service.yaml is applied
+# before this file. If it ever happens anyway, the fix is
+# "kubectl rollout restart deployment/frontend" - the Service only needs to
+# exist, it does not need any Ready endpoints behind it.
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: default
+  labels:
+    app: frontend
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: frontend
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: frontend
+
+      terminationGracePeriodSeconds: 40
+
+      containers:
+        - name: frontend
+          image: us-central1-docker.pkg.dev/travellens-ccp/travellens/frontend:v2
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 80
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+
+          # nginx has no database and no dependency to be unready for, so both
+          # probes ask the same question here and hit the same cheap endpoint.
+          # /healthz is a location block that returns 200 directly from nginx
+          # without reading a file or touching the SPA fallback, so it stays
+          # fast and cannot be confused with a React route.
+          #
+          # The meaningful liveness/readiness split in this application is on
+          # the backend, which is where the database dependency lives.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # The load balancer reaches these pods directly through a network
+          # endpoint group rather than via a node port. Removing a pod from the
+          # NEG takes a few seconds longer than removing it from the Service,
+          # so the sleep here is doing real work: without it, a deleted pod can
+          # still receive load balancer traffic after it has stopped listening,
+          # which the user sees as a 502.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+
+          # No securityContext on this container on purpose. The official nginx
+          # image starts its master process as root and then spawns workers as
+          # the nginx user, which needs CAP_SETUID and CAP_SETGID. Dropping
+          # capabilities here makes nginx fail at startup with
+          # "setuid(101) failed (1: Operation not permitted)". Hardening it
+          # properly means switching to nginx-unprivileged and moving the
+          # listener to port 8080, which is a change for a later milestone
+          # rather than something to half-do here.
+          securityContext:
+            allowPrivilegeEscalation: false

@@ -1,0 +1,63 @@
+# ---------------------------------------------------------------------------
+# PodDisruptionBudgets.
+#
+# A budget has no effect on ordinary life. It is consulted only for *voluntary*
+# disruptions - things that go through the Eviction API:
+#
+#     kubectl drain
+#     a GKE node pool upgrade
+#     the cluster autoscaler removing an underused node
+#     a node repair
+#
+# It is not consulted when a node loses power, when a kernel panics, or when a
+# pod is OOM-killed. Those are involuntary, and nothing can hold them back.
+#
+# maxUnavailable: 1 rather than minAvailable: 1
+# -----------------------------------------------
+# At the current floor of two replicas the two are equivalent. They stop being
+# equivalent the moment the autoscaler scales up. With minAvailable: 1 and five
+# replicas running, Kubernetes would happily evict four pods at once and leave
+# a single replica carrying all the traffic - technically within budget, and a
+# very effective way to cause the outage the budget was meant to prevent.
+# maxUnavailable: 1 is a rate limit instead of a floor: whatever the replica
+# count, disruptions happen one pod at a time, and the next eviction waits
+# until the replacement is Ready.
+#
+# Why this is what prevents intermittent 5xx
+# ------------------------------------------
+# During a node pool upgrade GKE drains nodes one after another. Without a
+# budget, the eviction API grants every request immediately. If both replicas
+# of a Deployment happen to sit on the node being drained - which is entirely
+# possible, since the scheduler is free to co-locate them - both are deleted at
+# the same instant, and there is a window of thirty to seventy seconds while
+# the replacements pull, start the JVM and pass their readiness probes during
+# which the Service has zero Ready endpoints. Every request in that window gets
+# a 502 or 503 from the load balancer. Nothing is logged as an error by the
+# application, because the application is not running.
+#
+# These two objects plus the topologySpreadConstraints in the Deployments are
+# the configuration that makes that window impossible: the constraint keeps the
+# replicas on different nodes, and the budget makes the drain wait for a Ready
+# replacement before touching the second one.
+# ---------------------------------------------------------------------------
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend
+  namespace: default
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: backend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend
+  namespace: default
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: frontend

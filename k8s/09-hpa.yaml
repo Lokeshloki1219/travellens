@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# HorizontalPodAutoscaler for the backend.
+#
+# The autoscaler reads each pod's CPU usage from metrics-server, divides it by
+# the pod's CPU *request* (200m, set in 01-backend-deployment.yaml), averages
+# that across all Ready replicas, and compares the result against the 50%
+# target below. So a replica counts as fully loaded at 100m of real CPU.
+#
+# Range is 2 to 5.
+#   - The floor is 2 rather than 1 because one replica cannot survive a node
+#     drain or a rolling update without downtime, and because a single replica
+#     makes the PodDisruptionBudget unenforceable.
+#   - The ceiling is 5 because the node pool is two e2-medium machines with
+#     roughly 1880m of allocatable CPU between them. Five backend replicas at a
+#     200m request is 1000m, which fits alongside the frontend and the
+#     kube-system pods. Setting a ceiling the cluster cannot schedule just
+#     produces Pending pods, which looks like autoscaling and achieves nothing.
+#
+# The behaviour block is tuned for a demonstration as much as for production:
+#   scaleUp   - no stabilisation window and a 100%-per-15s policy, so the
+#               reaction to load is immediate rather than averaged over minutes
+#   scaleDown - a two-minute window, so the scaled-up state stays visible long
+#               enough to screenshot and does not flap if load is bursty
+#
+# Note the autoscaler and the PodDisruptionBudget are solving opposite
+# problems. The autoscaler changes the replica count on purpose; the budget
+# constrains how fast the count may be reduced by someone else - a node
+# upgrade, a drain, the cluster autoscaler removing a node.
+# ---------------------------------------------------------------------------
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+
+  minReplicas: 2
+  maxReplicas: 5
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 120
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
