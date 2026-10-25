@@ -50,7 +50,7 @@ spec:
 
       containers:
         - name: frontend
-          image: us-central1-docker.pkg.dev/travellens-ccp/travellens/frontend:v2
+          image: us-central1-docker.pkg.dev/travellens-ccp/travellens/frontend:v3
           imagePullPolicy: IfNotPresent
 
           ports:

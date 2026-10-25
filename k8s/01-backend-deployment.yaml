@@ -65,7 +65,7 @@ spec:
 
       containers:
         - name: backend
-          image: us-central1-docker.pkg.dev/travellens-ccp/travellens/backend:v3
+          image: us-central1-docker.pkg.dev/travellens-ccp/travellens/backend:v4
           imagePullPolicy: IfNotPresent
 
           ports:
@@ -83,6 +83,10 @@ spec:
               value: travellens
             - name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE
               value: "2"
+            - name: APP_CORS_ALLOWED_ORIGINS
+              value: "https://travellens-uh.duckdns.org,http://localhost:5173"
+            - name: SERVER_FORWARD_HEADERS_STRATEGY
+              value: "framework"
             - name: APP_STORAGE_BUCKET
               value: travellens-uploads-travellens-ccp
             - name: DB_PASSWORD_SECRET
