@@ -81,6 +81,8 @@ spec:
               value: jdbc:postgresql://10.7.0.3:5432/springboot
             - name: SPRING_DATASOURCE_USERNAME
               value: travellens
+            - name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE
+              value: "2"
             - name: APP_STORAGE_BUCKET
               value: travellens-uploads-travellens-ccp
             - name: DB_PASSWORD_SECRET
