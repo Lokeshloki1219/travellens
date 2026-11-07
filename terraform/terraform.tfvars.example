@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+#
+# Nothing here is secret, but the alert address is a personal email and does
+# not belong in a public repository.
+
+alert_email = "you@example.com"
+
+# Everything else has a sensible default in variables.tf. Override only if
+# something has changed:
+#
+# project_id        = "travellens-ccp"
+# hostname          = "travellens-uh.duckdns.org"
+# github_repository = "Lokeshloki1219/travellens"

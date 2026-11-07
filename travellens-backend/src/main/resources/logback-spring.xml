@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Milestone 6: structured logging configuration.
+
+  Two profiles, because JSON is right in the cluster and wrong on a laptop:
+
+    default  - one JSON object per line, for Cloud Logging
+    local    - the normal human-readable Spring Boot console output
+
+  Activate the readable one with SPRING_PROFILES_ACTIVE=local when running
+  outside Kubernetes. The deployment sets no profile, so pods get JSON.
+
+  Note this file is logback-spring.xml rather than logback.xml. Only the
+  -spring variant is read by Spring Boot late enough for <springProfile> to
+  work; a plain logback.xml is picked up by Logback directly, before Spring
+  exists, and the profile blocks below would be ignored.
+-->
+<configuration>
+
+    <!-- Human-readable output for local development. -->
+    <springProfile name="local">
+        <include resource="org/springframework/boot/logging/logback/base.xml"/>
+    </springProfile>
+
+    <!-- Everything else - which in practice means every pod - gets JSON. -->
+    <springProfile name="!local">
+
+        <appender name="CLOUD_JSON" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+                <layout class="com.travellens.backend.logging.CloudLoggingLayout"/>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="CLOUD_JSON"/>
+        </root>
+
+        <!-- The access log from RequestLoggingFilter. Kept at INFO so that
+             successful requests are counted too - the dashboard shows the 5xx
+             rate as a proportion, which needs a denominator. -->
+        <logger name="http.access" level="INFO"/>
+
+        <!-- Hibernate and Hikari are chatty at INFO during startup and say
+             nothing useful afterwards. Quieting them keeps the log volume
+             (and the bill) down without losing anything diagnostic. -->
+        <logger name="org.hibernate.SQL" level="WARN"/>
+        <logger name="com.zaxxer.hikari" level="WARN"/>
+
+    </springProfile>
+
+</configuration>

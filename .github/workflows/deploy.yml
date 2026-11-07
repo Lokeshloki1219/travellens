@@ -1,0 +1,183 @@
+# ---------------------------------------------------------------------------
+# TravelLens CI/CD - Milestone 6
+#
+# Every push to the `deploy` branch builds the backend, rolls it out to GKE,
+# checks that the live HTTPS site actually works, and puts the previous version
+# back if either of those fails.
+#
+# Authentication uses Workload Identity Federation, not a service account key.
+# GitHub mints a short-lived OIDC token for this specific repository and branch,
+# Google exchanges it for an access token valid for an hour, and nothing
+# long-lived is ever stored. The two repository secrets below are not
+# credentials - they are the resource names of the WIF provider and the service
+# account to impersonate, and both are public identifiers. There is no JSON key
+# in this repository, in GitHub, or on anyone's laptop.
+# ---------------------------------------------------------------------------
+name: Build, deploy and health-check
+
+on:
+  push:
+    branches:
+      - deploy
+  # Lets the pipeline be re-run from the Actions tab without pushing a commit,
+  # which is useful when rehearsing the demo.
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: travellens-ccp
+  GAR_HOST: us-central1-docker.pkg.dev
+  REPOSITORY: travellens
+  CLUSTER_NAME: travellens-cluster
+  CLUSTER_ZONE: us-central1-a
+  DEPLOYMENT: backend
+  CONTAINER: backend
+  HEALTH_URL: https://travellens-uh.duckdns.org
+
+permissions:
+  # Required for Workload Identity Federation: it lets the job request an OIDC
+  # token from GitHub. Without it the auth step fails with a confusing
+  # "unable to get ID token" error.
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to GKE
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the commit being deployed
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------
+      # Authenticate without a key
+      # ---------------------------------------------------------------
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Let Docker push to Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GAR_HOST }} --quiet
+
+      - name: Get cluster credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.CLUSTER_NAME }}
+          location: ${{ env.CLUSTER_ZONE }}
+
+      # ---------------------------------------------------------------
+      # Record what is running now, so the log says what we rolled back to
+      # ---------------------------------------------------------------
+      - name: Record the currently deployed image
+        run: |
+          CURRENT=$(kubectl get deployment/${{ env.DEPLOYMENT }} \
+            -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "Currently serving: $CURRENT"
+          echo "PREVIOUS_IMAGE=$CURRENT" >> "$GITHUB_ENV"
+
+      # ---------------------------------------------------------------
+      # Build
+      #
+      # The image is tagged with the commit SHA rather than a moving tag like
+      # :latest. That is what makes rollback meaningful: every deployment is a
+      # distinct, immutable artifact, and "the previous version" is a specific
+      # image rather than whatever :latest happened to point at an hour ago.
+      # ---------------------------------------------------------------
+      - name: Build the backend image
+        run: |
+          IMAGE="${{ env.GAR_HOST }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/backend:${{ github.sha }}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          docker build -t "$IMAGE" travellens-backend
+
+      - name: Push the image
+        run: docker push "$IMAGE"
+
+      # ---------------------------------------------------------------
+      # Deploy
+      # ---------------------------------------------------------------
+      - name: Roll out the new image
+        run: |
+          kubectl set image deployment/${{ env.DEPLOYMENT }} \
+            ${{ env.CONTAINER }}="$IMAGE"
+
+      # The Deployment uses maxUnavailable: 0 and maxSurge: 1, so the new pod
+      # has to pass its readiness probe before an old one is removed. If the new
+      # pod never becomes Ready this command blocks and then fails - and the old
+      # pods have been serving traffic unaffected the entire time.
+      #
+      # 120s: a healthy pod is Ready in about 45 seconds (JVM, Flyway, HikariCP),
+      # so this is roughly two and a half times the real figure. Long enough that
+      # a slow-but-fine start is never mistaken for a failure, short enough that
+      # a genuine failure is caught in two minutes instead of ten.
+      - name: Wait for the rollout to become Ready
+        run: |
+          kubectl rollout status deployment/${{ env.DEPLOYMENT }} --timeout=120s
+
+      # ---------------------------------------------------------------
+      # Health check
+      #
+      # Deliberately against the public HTTPS hostname, not against a pod. A pod
+      # can be Ready while the path to it is broken - an unhealthy load balancer
+      # backend, a bad ingress, an expired certificate. This checks what a user
+      # would actually experience, through the load balancer, through nginx,
+      # into the backend, and down to Cloud SQL, because /api/destinations reads
+      # from the database.
+      # ---------------------------------------------------------------
+      - name: Health-check the live site
+        run: |
+          for attempt in $(seq 1 10); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+              "${{ env.HEALTH_URL }}/api/destinations" || echo "000")
+            echo "Attempt $attempt: HTTP $CODE"
+            if [ "$CODE" = "200" ]; then
+              echo "Health check passed."
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "Health check failed after 10 attempts."
+          exit 1
+
+      - name: Report success
+        run: |
+          echo "Deployed $IMAGE"
+          echo "Previous version was $PREVIOUS_IMAGE"
+
+      # ---------------------------------------------------------------
+      # Rollback
+      #
+      # if: failure() catches both of the gates above - a rollout that never
+      # became Ready, and a rollout that came up but whose site does not work.
+      # Both mean the same thing operationally: put the last good version back,
+      # now, without waiting for a human.
+      # ---------------------------------------------------------------
+      - name: Roll back
+        if: failure()
+        run: |
+          echo "::error::Deployment failed. Rolling back to $PREVIOUS_IMAGE"
+          kubectl rollout undo deployment/${{ env.DEPLOYMENT }}
+          kubectl rollout status deployment/${{ env.DEPLOYMENT }} --timeout=180s
+
+      - name: Verify the previous version is serving
+        if: failure()
+        run: |
+          for attempt in $(seq 1 10); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+              "${{ env.HEALTH_URL }}/api/destinations" || echo "000")
+            echo "Verify attempt $attempt: HTTP $CODE"
+            if [ "$CODE" = "200" ]; then
+              RUNNING=$(kubectl get deployment/${{ env.DEPLOYMENT }} \
+                -o jsonpath='{.spec.template.spec.containers[0].image}')
+              echo "Rollback verified. Serving: $RUNNING"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "::error::Rollback did not restore a healthy site. Manual intervention required."
+          exit 1

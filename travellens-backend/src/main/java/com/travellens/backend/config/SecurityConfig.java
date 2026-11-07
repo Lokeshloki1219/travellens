@@ -71,6 +71,20 @@ public class SecurityConfig {
                         // a connection string or a version number.
                         .requestMatchers("/healthz/**").permitAll()
 
+                        // Milestone 6: the controlled-error endpoint used to
+                        // exercise the observability chain. /api/debug/boom
+                        // returns 500 by design, which produces a JSON log line
+                        // with httpStatus 500, which increments the log-based
+                        // metric, which fires the alert policy. Open so it can
+                        // be triggered from a browser address bar on camera.
+                        //
+                        // It returns no data, writes nothing and reveals nothing
+                        // about the schema or the environment, but it is still an
+                        // unauthenticated way for anyone to write to our logs,
+                        // and it is listed as a known exception in the written
+                        // analysis rather than quietly left in.
+                        .requestMatchers("/api/debug/**").permitAll()
+
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/uploads/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/destinations/**").permitAll()

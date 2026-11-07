@@ -78,6 +78,30 @@ public class HealthController {
     /** Seconds the readiness query may take before it is abandoned. */
     private static final int QUERY_TIMEOUT_SECONDS = 3;
 
+    /**
+     * Milestone 6: the controlled failure used to demonstrate automatic
+     * rollback.
+     *
+     * <p>Flip this to {@code true}, commit, and push to the {@code deploy}
+     * branch. The pipeline builds and pushes the image and {@code kubectl set
+     * image} succeeds, so the deployment itself looks fine &mdash; but the new
+     * pods never pass their readiness probe, so {@code kubectl rollout status}
+     * blocks and fails at its 120-second timeout. The workflow's
+     * {@code if: failure()} step then runs {@code kubectl rollout undo} and
+     * verifies the site still answers 200.
+     *
+     * <p>The reason this is a safe way to break a deployment is the Deployment's
+     * {@code maxUnavailable: 0}: a new pod has to become Ready before an old one
+     * is removed, so the previous replicas keep serving traffic for the entire
+     * failed rollout. No user sees an error, and nothing has to be repaired
+     * afterwards beyond reverting the commit.
+     *
+     * <p>Chosen over the alternatives deliberately. Stopping Cloud SQL, revoking
+     * an IAM role or deleting a secret would all also fail a deployment, and
+     * every one of them risks real data or takes minutes to undo.
+     */
+    private static final boolean FORCE_READINESS_FAILURE = false;
+
     private final DataSource dataSource;
 
     public HealthController(DataSource dataSource) {
@@ -109,6 +133,18 @@ public class HealthController {
      */
     @GetMapping(value = "/ready", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Map<String, Object>> ready() {
+        // Milestone 6 rollback demonstration. See FORCE_READINESS_FAILURE above.
+        // Checked before the database is touched, so a pod built with the switch
+        // on fails readiness immediately and deterministically rather than
+        // depending on Cloud SQL being slow or unreachable.
+        if (FORCE_READINESS_FAILURE) {
+            Map<String, Object> failing = new LinkedHashMap<>();
+            failing.put("check", "readiness");
+            failing.put("status", "DOWN");
+            failing.put("detail", "Readiness deliberately disabled to demonstrate automatic rollback");
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(failing);
+        }
+
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("check", "readiness");
 
