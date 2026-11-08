@@ -100,7 +100,7 @@ public class HealthController {
      * an IAM role or deleting a secret would all also fail a deployment, and
      * every one of them risks real data or takes minutes to undo.
      */
-    private static final boolean FORCE_READINESS_FAILURE = true;
+    private static final boolean FORCE_READINESS_FAILURE = false;
 
     private final DataSource dataSource;
 
