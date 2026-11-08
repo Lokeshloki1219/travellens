@@ -162,6 +162,7 @@ resource "google_monitoring_alert_policy" "http_5xx" {
 resource "google_monitoring_dashboard" "travellens" {
   dashboard_json = jsonencode({
     displayName = "TravelLens - Service Health"
+    name        = "projects/875199324656/dashboards/6d23c2cb-97fa-4df6-9e6e-5ff6114b8326"
 
     mosaicLayout = {
       columns = 12
@@ -262,4 +263,14 @@ resource "google_monitoring_dashboard" "travellens" {
   })
 
   depends_on = [google_project_service.required]
+
+  # The Monitoring API returns server-managed fields inside dashboard_json: an
+  # etag that changes on every write, and it omits xPos/yPos when they are zero.
+  # A hand-written JSON body can therefore never match byte for byte, and every
+  # plan would report a diff that applying does not resolve. Terraform still owns
+  # this resource - creation, deletion and replacement - but in-place drift of
+  # the JSON body is ignored.
+  lifecycle {
+    ignore_changes = [dashboard_json]
+  }
 }
