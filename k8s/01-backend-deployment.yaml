@@ -35,7 +35,7 @@ spec:
       # for it to pass its readiness probe, then remove the old one. With two
       # replicas this guarantees at least two Ready pods throughout a deploy.
       maxUnavailable: 0
-      maxSurge: 1
+      maxSurge: 2
 
   template:
     metadata:
